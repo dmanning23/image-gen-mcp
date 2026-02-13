@@ -113,6 +113,27 @@ interface UpscaleImagePayload {
     }>;
 }
 
+interface HiresFixImageArgs {
+    image_path: string;
+    hr_scale?: number;
+    hr_upscaler?: string;
+    denoising_strength?: number;
+    steps?: number;
+}
+
+interface Img2ImgPayload {
+    init_images: string[];
+    prompt: string;
+    negative_prompt: string;
+    steps: number;
+    cfg_scale: number;
+    width: number;
+    height: number;
+    denoising_strength: number;
+    sampler_name: string;
+    scheduler: string;
+}
+
 class ImageGenServer {
     private server: Server;
     private axiosInstance;
@@ -240,6 +261,42 @@ class ImageGenServer {
                             }
                         },
                         required: ['images']
+                    }
+                },
+                {
+                    name: 'hires_fix_image',
+                    description: 'Apply hires.fix upscaling to an existing image using img2img. This sends the request to Stable Diffusion but does not wait for completion - the image will be saved to the SD output directory when finished.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            image_path: {
+                                type: 'string',
+                                description: 'Path to the image file to upscale'
+                            },
+                            hr_scale: {
+                                type: 'number',
+                                description: 'Upscale factor (default: 2)',
+                                minimum: 1,
+                                maximum: 4
+                            },
+                            hr_upscaler: {
+                                type: 'string',
+                                description: 'Upscaler to use (default: Latent)'
+                            },
+                            denoising_strength: {
+                                type: 'number',
+                                description: 'How much to alter the image (default: 0.7, lower = closer to original)',
+                                minimum: 0,
+                                maximum: 1
+                            },
+                            steps: {
+                                type: 'number',
+                                description: 'Number of sampling steps (default: 20)',
+                                minimum: 1,
+                                maximum: 150
+                            }
+                        },
+                        required: ['image_path']
                     }
                 }
             ]
@@ -372,6 +429,61 @@ class ImageGenServer {
                         return { content: [{ type: 'text', text: JSON.stringify(results) }] };
                     }
 
+                    case 'hires_fix_image': {
+                        const args = request.params.arguments;
+                        if (!isHiresFixImageArgs(args)) {
+                            throw new McpError(ErrorCode.InvalidParams, 'Invalid parameters');
+                        }
+
+                        // Read the source image
+                        const imageData = await fs.promises.readFile(args.image_path);
+                        const base64Image = `data:image/png;base64,${imageData.toString('base64')}`;
+
+                        // Get image dimensions to calculate target size
+                        const metadata = await sharp(imageData).metadata();
+                        const targetWidth = Math.round((metadata.width || 1024) * (args.hr_scale || 2));
+                        const targetHeight = Math.round((metadata.height || 1024) * (args.hr_scale || 2));
+
+                        // Get the original prompt from the image metadata if available
+                        let prompt = '';
+                        try {
+                            const pngInfo = await this.axiosInstance.post('/sdapi/v1/png-info', { image: base64Image });
+                            // Try to extract prompt from the info string
+                            const infoText = pngInfo.data.info || '';
+                            const promptMatch = infoText.match(/^(.+?)(?:\nNegative prompt:|Steps:)/s);
+                            prompt = promptMatch ? promptMatch[1].trim() : '';
+                        } catch (e) {
+                            // If we can't get the prompt, use an empty one
+                            prompt = '';
+                        }
+
+                        const payload: Img2ImgPayload = {
+                            init_images: [base64Image],
+                            prompt: prompt,
+                            negative_prompt: '',
+                            steps: args.steps || 20,
+                            cfg_scale: 7,
+                            width: targetWidth,
+                            height: targetHeight,
+                            denoising_strength: args.denoising_strength || 0.7,
+                            sampler_name: 'Euler',
+                            scheduler: 'Simple'
+                        };
+
+                        // Fire and forget - don't wait for response
+                        this.axiosInstance.post('/sdapi/v1/img2img', payload, { timeout: 1000 })
+                            .catch(() => {
+                                // Ignore timeout or any errors - we expect this to timeout
+                            });
+
+                        return {
+                            content: [{
+                                type: 'text',
+                                text: `Hires.fix request sent to Stable Diffusion (${args.hr_scale || 2}x upscale from ${metadata.width}x${metadata.height} to ${targetWidth}x${targetHeight}). The image will be saved to the SD output directory when processing completes. This will take a while on CPU.`
+                            }]
+                        };
+                    }
+
                     default:
                         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
                 }
@@ -468,6 +580,32 @@ function isUpscaleImagesArgs(value: unknown): value is UpscaleImagesArgs {
     if (v.upscaler_1 !== undefined && typeof v.upscaler_1 !== 'string') return false;
     if (v.upscaler_2 !== undefined && typeof v.upscaler_2 !== 'string') return false;
     if (v.output_path !== undefined && typeof v.output_path !== 'string') return false;
+
+    return true;
+}
+
+function isHiresFixImageArgs(value: unknown): value is HiresFixImageArgs {
+    if (typeof value !== 'object' || value === null) return false;
+    const v = value as Record<string, unknown>;
+
+    if (typeof v.image_path !== 'string') return false;
+
+    if (v.hr_scale !== undefined) {
+        const scale = Number(v.hr_scale);
+        if (isNaN(scale) || scale < 1 || scale > 4) return false;
+    }
+
+    if (v.hr_upscaler !== undefined && typeof v.hr_upscaler !== 'string') return false;
+
+    if (v.denoising_strength !== undefined) {
+        const strength = Number(v.denoising_strength);
+        if (isNaN(strength) || strength < 0 || strength > 1) return false;
+    }
+
+    if (v.steps !== undefined) {
+        const steps = Number(v.steps);
+        if (isNaN(steps) || steps < 1 || steps > 150) return false;
+    }
 
     return true;
 }
