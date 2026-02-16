@@ -168,7 +168,7 @@ class ImageGenServer {
             tools: [
                 {
                     name: 'generate_image',
-                    description: 'Generate an image using Stable Diffusion',
+                    description: 'Generate an image using Stable Diffusion. IMPORTANT: Generated images are saved to the local filesystem where the Stable Diffusion server runs. Claude CANNOT access these files - they are saved to the user\'s local machine and must be manually retrieved from the output directory. This tool only returns the file path on the local filesystem, not the actual image data.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -221,7 +221,7 @@ class ImageGenServer {
                 },
                 {
                     name: 'upscale_images',
-                    description: 'Upscale one or more images using Stable Diffusion',
+                    description: 'Upscale one or more images using Stable Diffusion. IMPORTANT: Upscaled images are saved to the local filesystem. Claude CANNOT access these files - they must be manually retrieved from the output directory. This tool only returns file paths on the local filesystem.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -265,7 +265,7 @@ class ImageGenServer {
                 },
                 {
                     name: 'hires_fix_image',
-                    description: 'Apply hires.fix upscaling to an existing image using img2img. This sends the request to Stable Diffusion but does not wait for completion - the image will be saved to the SD output directory when finished.',
+                    description: 'Apply hires.fix upscaling to an existing image using img2img. This sends the request to Stable Diffusion but does not wait for completion - the image will be saved to the SD output directory on the local filesystem when finished. Claude CANNOT access the output file.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -348,7 +348,12 @@ class ImageGenServer {
                             results.push({ path: outputPath, parameters: pngInfoResponse.data.info });
                         }
 
-                        return { content: [{ type: 'text', text: JSON.stringify(results) }] };
+                        return {
+                            content: [{
+                                type: 'text',
+                                text: `Image generation complete. Files saved to local filesystem:\n\n${JSON.stringify(results, null, 2)}\n\nIMPORTANT: These files are on the user's local machine at the paths shown above. Claude cannot access or view these files. The user must manually retrieve them from the output directory.`
+                            }]
+                        };
                     }
 
                     case 'get_sd_models': {
@@ -426,7 +431,12 @@ class ImageGenServer {
                             results.push({ path: outputPath });
                         }
 
-                        return { content: [{ type: 'text', text: JSON.stringify(results) }] };
+                        return {
+                            content: [{
+                                type: 'text',
+                                text: `Image upscaling complete. Files saved to local filesystem:\n\n${JSON.stringify(results, null, 2)}\n\nIMPORTANT: These files are on the user's local machine at the paths shown above. Claude cannot access or view these files. The user must manually retrieve them from the output directory.`
+                            }]
+                        };
                     }
 
                     case 'hires_fix_image': {
@@ -479,7 +489,7 @@ class ImageGenServer {
                         return {
                             content: [{
                                 type: 'text',
-                                text: `Hires.fix request sent to Stable Diffusion (${args.hr_scale || 2}x upscale from ${metadata.width}x${metadata.height} to ${targetWidth}x${targetHeight}). The image will be saved to the SD output directory when processing completes. This will take a while on CPU.`
+                                text: `Hires.fix upscale request sent to Stable Diffusion (${args.hr_scale || 2}x upscale from ${metadata.width}x${metadata.height} to ${targetWidth}x${targetHeight}). The image will be saved to the SD output directory on the local filesystem when processing completes. This will take a while on CPU. Claude cannot access the output file - the user must manually retrieve it from the SD output directory.`
                             }]
                         };
                     }
